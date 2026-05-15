@@ -8,6 +8,7 @@
         "title": { "type": "string", "description": "Name of the dish" },
         "ingredients": { "type": "array", "items": { "type": "string" }, "description": "List of ingredients" },
         "instructions": { "type": "array", "items": { "type": "string" }, "description": "Step-by-step instructions" },
+        "tips": { "type": "array", "items": { "type": "string" }, "description": "Chef's tips and insights" },
         "category": { "type": "string", "enum": ["Breakfast", "Lunch", "Dinner", "Dessert", "Snack", "Drink", "Other"], "description": "Recipe category" },
         "rating": { "type": "number", "description": "User rating from 1 to 5" },
         "authorId": { "type": "string", "description": "UID of the user who created the recipe" },

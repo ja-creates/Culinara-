@@ -10,6 +10,10 @@ service cloud.firestore {
     // Shared Helpers
     // ===============================================================
     function isSignedIn() { return request.auth != null; }
+
+    match /test/connection {
+      allow read: if true;
+    }
     function isVerified() { return isSignedIn() && request.auth.token.email_verified == true; }
     
     // Auth-based isAdmin - includes bootstrapped admin
@@ -43,6 +47,8 @@ service cloud.firestore {
              data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
              data.ownerId is string && isValidId(data.ownerId) &&
              data.members is map && data.members.size() <= 50 &&
+             // Ensure at least the owner is an admin
+             data.members.get(data.ownerId, 'none') == 'admin' &&
              (!('createdAt' in data) || data.createdAt is timestamp);
     }
 
@@ -50,12 +56,14 @@ service cloud.firestore {
       return data.keys().hasAll(['title', 'ingredients', 'instructions', 'authorId', 'householdId', 'createdAt']) &&
              data.title is string && data.title.size() > 0 && data.title.size() <= 200 &&
              data.ingredients is list && data.ingredients.size() <= 100 &&
+             (data.ingredients.size() == 0 || data.ingredients[0] is string) &&
              data.instructions is list && data.instructions.size() <= 50 &&
-             data.category is string && data.category in ["Breakfast", "Lunch", "Dinner", "Dessert", "Snack", "Drink", "Other"] &&
+             (data.instructions.size() == 0 || data.instructions[0] is string) &&
+             (!('category' in data) || (data.category is string && data.category in ["Breakfast", "Lunch", "Dinner", "Dessert", "Snack", "Drink", "Other"])) &&
              data.authorId == request.auth.uid &&
              data.householdId is string && isValidId(data.householdId) &&
              (isCreate ? data.createdAt == request.time : true) &&
-             (!('tips' in data) || (data.tips is list && data.tips.size() <= 20)) &&
+             (!('tips' in data) || (data.tips is list && data.tips.size() <= 20 && (data.tips.size() == 0 || data.tips[0] is string))) &&
              (!('rating' in data) || (data.rating is number && data.rating >= 0 && data.rating <= 5)) &&
              (!('estimatedTime' in data) || (data.estimatedTime == null || data.estimatedTime is number)) &&
              (!('isPublic' in data) || data.isPublic is bool) &&
@@ -67,8 +75,14 @@ service cloud.firestore {
     // ===============================================================
 
     match /users/{userId} {
-      allow read: if isSignedIn();
-      allow create, update: if isVerified() && request.auth.uid == userId && isValidUser(incoming());
+      allow get: if isSignedIn() && isValidId(userId);
+      allow list: if isSignedIn(); 
+      allow create: if isVerified() && request.auth.uid == userId && 
+                      isValidUser(incoming()) && 
+                      incoming().keys().size() <= 3; // displayName, photoURL, (role)
+      allow update: if isVerified() && request.auth.uid == userId && 
+                      isValidUser(incoming()) &&
+                      incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL']);
     }
 
     match /households/{householdId} {
@@ -82,17 +96,29 @@ service cloud.firestore {
         return existing().members.get(request.auth.uid, 'none') == 'admin' || isOwner();
       }
 
-      allow read: if isMember() || isAdmin();
+      allow get: if (isMember() || isAdmin()) && isValidId(householdId);
+      allow list: if isSignedIn() && resource.data.members[request.auth.uid] != null;
+      
       allow create: if isVerified() && 
+                      isValidId(householdId) &&
                       incoming().ownerId == request.auth.uid && 
                       incoming().members[request.auth.uid] == 'admin' &&
-                      isValidHousehold(incoming());
+                      isValidHousehold(incoming()) &&
+                      incoming().keys().size() <= 5; // name, ownerId, members, createdAt, ...
       
-      allow update: if (isHouseholdAdmin() || isAdmin()) && 
+      allow update: if isVerified() && (isHouseholdAdmin() || isAdmin()) && 
                       incoming().ownerId == existing().ownerId &&
-                      isValidHousehold(incoming());
+                      isValidHousehold(incoming()) &&
+                      (
+                        // Action: Update Name
+                        incoming().diff(existing()).affectedKeys().hasOnly(['name']) ||
+                        // Action: Manage Members
+                        (isHouseholdAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['members'])) ||
+                        // Action: Admin Override
+                        isAdmin()
+                      );
 
-      allow delete: if (isOwner() || isAdmin());
+      allow delete: if (isOwner() || isAdmin()) && isValidId(householdId);
     }
 
     match /recipes/{recipeId} {
@@ -111,26 +137,43 @@ service cloud.firestore {
         );
       }
 
-      allow read: if canAccessRecipe();
+      // Separate get and list to avoid get() in list
+      allow get: if canAccessRecipe() && isValidId(recipeId);
+      allow list: if existing().isPublic == true || (isSignedIn() && existing().authorId == request.auth.uid);
+      // Note: Listing recipes for a household must be done via a query that filters by householdId
+      // and we cannot easily verify membership in 'allow list' without a 'get()' call.
+      // We'll allow the list if the document's own data is sufficient, 
+      // or the client MUST rely on household-based queries.
       
       allow create: if isVerified() && 
+                      isValidId(recipeId) &&
                       isValidRecipe(incoming(), true) &&
                       exists(/databases/$(database)/documents/households/$(incoming().householdId)) &&
-                      getIncomingHousehold().members.get(request.auth.uid, 'none') in ['admin', 'member'];
+                      getIncomingHousehold().members.get(request.auth.uid, 'none') in ['admin', 'member'] &&
+                      incoming().keys().size() <= 15;
 
-      allow update: if isVerified() &&
+      allow update: if isVerified() && 
+                      isValidId(recipeId) &&
                       isValidRecipe(incoming(), false) &&
                       (isAdmin() || (
                         (existing().authorId == request.auth.uid || getHousehold().members.get(request.auth.uid, 'none') == 'admin') &&
                         incoming().authorId == existing().authorId &&
                         incoming().householdId == existing().householdId &&
-                        incoming().createdAt == existing().createdAt
+                        incoming().createdAt == existing().createdAt &&
+                        (
+                          // Action: Edit Content
+                          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'ingredients', 'instructions', 'tips', 'category', 'estimatedTime', 'imageUrl', 'sourceUrl']) ||
+                          // Action: Toggle Privacy/Sharing
+                          incoming().diff(existing()).affectedKeys().hasOnly(['isPublic', 'shareToken']) ||
+                          // Action: Rate
+                          (isSignedIn() && incoming().diff(existing()).affectedKeys().hasOnly(['rating']))
+                        )
                       ));
 
-      allow delete: if isAdmin() || (isVerified() && (
+      allow delete: if (isAdmin() || (isVerified() && (
                       existing().authorId == request.auth.uid || 
                       get(/databases/$(database)/documents/households/$(existing().householdId)).data.members.get(request.auth.uid, 'none') == 'admin'
-                    ));
+                    ))) && isValidId(recipeId);
     }
   }
 }

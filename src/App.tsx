@@ -544,9 +544,28 @@ export default function App() {
     }
   }, []);
 
+  const [isAuthBusy, setIsAuthBusy] = useState(false);
+
+  const handleSignIn = async () => {
+    if (isAuthBusy) return;
+    setIsAuthBusy(true);
+    try {
+      await signIn();
+    } catch (e: any) {
+      setIsAuthBusy(false);
+      if (e.code === 'auth/cancelled-popup-request' || e.code === 'auth/popup-closed-by-user') {
+        console.log("Sign in was cancelled or popup closed.");
+        return;
+      }
+      console.error("Auth Error:", e);
+      alert(`Sign in failed: ${e.message || 'Unknown error'}`);
+    }
+  };
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
       setUser(u);
+      setIsAuthBusy(false);
       if (u) {
         // Ensure user profile exists
         const userDoc = await getDoc(doc(db, 'users', u.uid));
@@ -883,9 +902,23 @@ export default function App() {
             <h1 className="text-5xl font-bold text-stone-900 tracking-tight">Culinara</h1>
             <p className="text-stone-500 text-lg">Your intelligent culinary companion.</p>
           </div>
-          <Button onClick={signIn} className="w-full py-4 text-lg shadow-lg">
-            Sign in with Google
-          </Button>
+          <div className="space-y-4">
+            <Button 
+              disabled={isAuthBusy}
+              onClick={handleSignIn} 
+              className="w-full py-4 text-lg shadow-lg"
+            >
+              {isAuthBusy ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  Connecting...
+                </>
+              ) : (
+                "Sign in with Google"
+              )}
+            </Button>
+            {isDarkMode ? null : <p className="text-xs text-stone-400">Secure authentication powered by Firebase</p>}
+          </div>
         </motion.div>
       </div>
     );
@@ -1623,7 +1656,9 @@ export default function App() {
                    {!user && (
                      <div className="space-y-4">
                         <p className="text-stone-500">Want to save this recipe and more?</p>
-                        <Button onClick={signIn}>Get Started with Culinara</Button>
+                        <Button disabled={isAuthBusy} onClick={handleSignIn}>
+                           {isAuthBusy ? "Connecting..." : "Get Started with Culinara"}
+                         </Button>
                      </div>
                    )}
                 </footer>

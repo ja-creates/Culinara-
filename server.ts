@@ -12,9 +12,20 @@ async function startServer() {
 
   app.use(express.json());
 
-  // Gemini Setup
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+  // Gemini Setup (Lazy initialized to avoid crashes if key missing)
+  let model: any = null;
+
+  function getAiModel() {
+    if (!model) {
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error("GEMINI_API_KEY is not set. Please provide it in AI Studio Settings > Secrets.");
+      }
+      const genAI = new GoogleGenerativeAI(apiKey);
+      model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    }
+    return model;
+  }
 
   // API Routes
   app.get("/api/health", (req, res) => {
@@ -28,9 +39,10 @@ async function startServer() {
         return res.status(400).json({ error: "Ingredients array is required" });
       }
 
+      const currentModel = getAiModel();
       const prompt = `Given these ingredients: ${ingredients.join(", ")}, provide 3 short, creative professional chef tips for preparation or cooking. Keep each tip under 20 words. Return as a JSON array of strings.`;
 
-      const result = await model.generateContent(prompt);
+      const result = await currentModel.generateContent(prompt);
       const text = result.response.text();
       
       // Attempt to parse JSON from the response

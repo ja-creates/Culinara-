@@ -23,7 +23,8 @@ import {
   auth, 
   db, 
   signIn, 
-  logOut 
+  logOut,
+  isConfigValid
 } from './firebase';
 import { 
   Recipe, 
@@ -838,6 +839,35 @@ export default function App() {
     );
   }
 
+  if (!isConfigValid) {
+    return (
+      <div className="min-h-screen bg-stone-50 dark:bg-stone-950 flex flex-col items-center justify-center p-6 text-center">
+        <div className="max-w-md space-y-6">
+          <div className="w-16 h-16 bg-red-100 dark:bg-red-900/20 rounded-full flex items-center justify-center mx-auto">
+            <AlertCircle className="w-8 h-8 text-red-600 dark:text-red-400" />
+          </div>
+          <h1 className="text-2xl font-bold text-stone-900 dark:text-stone-50">Configuration Required</h1>
+          <p className="text-stone-600 dark:text-stone-400">
+            Firebase environment variables are missing. To secure the app, please add your Firebase keys to the <strong>Settings &gt; Secrets</strong> menu in AI Studio.
+          </p>
+          <div className="p-4 bg-stone-100 dark:bg-stone-900 rounded-2xl text-left font-mono text-xs space-y-2 overflow-x-auto text-stone-700 dark:text-stone-300">
+            <div className="text-stone-400 dark:text-stone-500 mb-2">// Required keys in Settings &gt; Secrets:</div>
+            <div>VITE_FIREBASE_API_KEY</div>
+            <div>VITE_FIREBASE_PROJECT_ID</div>
+            <div>VITE_FIREBASE_AUTH_DOMAIN</div>
+            <div>VITE_FIREBASE_STORAGE_BUCKET</div>
+            <div>VITE_FIREBASE_MESSAGING_SENDER_ID</div>
+            <div>VITE_FIREBASE_APP_ID</div>
+            <div>VITE_FIREBASE_FIRESTORE_DATABASE_ID</div>
+          </div>
+          <p className="text-sm text-stone-500">
+            Reload the page after adding secrets.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (!user) {
     return (
       <div className="min-h-screen bg-stone-50 flex flex-col items-center justify-center p-6 font-serif">
@@ -1117,10 +1147,44 @@ export default function App() {
               </ol>
               
               {viewingRecipe?.tips && viewingRecipe.tips.length > 0 && (
-                <div className="mt-8 p-6 bg-amber-50 dark:bg-amber-900/10 rounded-3xl border border-amber-100 dark:border-amber-900/20 space-y-3">
-                  <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400">
-                    <Lightbulb className="w-5 h-5" />
-                    <h5 className="font-bold uppercase tracking-wider text-xs">Chef's Tips</h5>
+                <div className="mt-8 p-6 bg-amber-50 dark:bg-amber-900/10 rounded-3xl border border-amber-100 dark:border-amber-900/20 space-y-3 relative overflow-hidden group/tips">
+                  <div className="flex items-center justify-between text-amber-700 dark:text-amber-400">
+                    <div className="flex items-center gap-2">
+                      <Lightbulb className="w-5 h-5 transition-transform group-hover/tips:rotate-12" />
+                      <h5 className="font-bold uppercase tracking-wider text-xs">Chef's Tips</h5>
+                    </div>
+                    <button 
+                      onClick={async () => {
+                        if (!viewingRecipe) return;
+                        setIsProcessing(true);
+                        try {
+                          const res = await fetch('/api/ai/suggest-tips', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ ingredients: viewingRecipe.ingredients })
+                          });
+                          const data = await res.json();
+                          if (data.tips) {
+                            await updateDoc(doc(db, 'recipes', viewingRecipe.id!), {
+                              tips: [...(viewingRecipe.tips || []), ...data.tips]
+                            });
+                            setViewingRecipe({
+                              ...viewingRecipe,
+                              tips: [...(viewingRecipe.tips || []), ...data.tips]
+                            });
+                          }
+                        } catch (e) {
+                          console.error("AI Error:", e);
+                        } finally {
+                          setIsProcessing(false);
+                        }
+                      }}
+                      disabled={isProcessing}
+                      className="text-[10px] font-bold uppercase py-1 px-3 rounded-full border border-amber-200 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors flex items-center gap-1.5"
+                    >
+                      {isProcessing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+                      AI Suggest
+                    </button>
                   </div>
                   <ul className="space-y-2">
                     {viewingRecipe.tips.map((tip, i) => (
